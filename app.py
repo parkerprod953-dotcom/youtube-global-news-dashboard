@@ -368,20 +368,7 @@ def main():
 
     region_code = REGION_CHOICES[region_label]
 
-    # Extra: which regions to combine for the combined tab
-    combine_options = [
-        lbl for lbl in REGION_CHOICES.keys()
-        if not lbl.startswith("Worldwide proxy")
-    ]
-    combine_labels = st.multiselect(
-        "Optional: combine multiple regions for a pseudo-global view",
-        options=combine_options,
-        default=["United States", "Canada", "United Kingdom"],
-        help="These regions will be merged in the **Combined regions** tab.",
-    )
-    combine_codes = sorted({REGION_CHOICES[lbl] for lbl in combine_labels})
-
-    refresh = st.button("🔄 Refresh data now")
+    refresh = st.button("🔄 Refresh primary region data")
 
     # Single-region data
     df = fetch_trending_news_for_region(
@@ -430,21 +417,68 @@ def main():
     with tab_combined:
         st.subheader("Combined regions – pseudo-global view")
         st.caption(
-            "This section merges videos from multiple regions' News & Politics trending lists and ranks them "
-            "by current global view count. Each card shows which region that instance is trending in."
+            "Select multiple regions and click **GO** to merge their News & Politics trending lists. "
+            "Results are ranked by current global view count; each card shows which region "
+            "that particular instance is trending in."
         )
 
-        if not combine_codes:
-            st.info("Select at least one region to combine in the multiselect above.")
+        # Default stored selection for combined view
+        if "combined_codes" not in st.session_state:
+            st.session_state.combined_codes = ["US", "CA", "GB"]
+
+        combine_options = [
+            lbl for lbl in REGION_CHOICES.keys()
+            if not lbl.startswith("Worldwide proxy")
+        ]
+
+        # Show the multiselect using labels, convert to codes when GO is clicked
+        combine_labels = st.multiselect(
+            "Select regions to combine",
+            options=combine_options,
+            default=[
+                "United States",
+                "Canada",
+                "United Kingdom",
+            ],
+            help="These regions will be merged into one combined view when you press GO.",
+            key="combine_labels",
+        )
+
+        go_col, _ = st.columns([1, 3])
+        with go_col:
+            if st.button("▶ GO", key="go_combined"):
+                # Update stored combined codes only when GO is pressed
+                selected_codes = sorted({
+                    REGION_CHOICES[lbl]
+                    for lbl in combine_labels
+                    if lbl in REGION_CHOICES
+                })
+                if selected_codes:
+                    st.session_state.combined_codes = selected_codes
+
+        combined_codes = st.session_state.combined_codes
+
+        if not combined_codes:
+            st.info("Select at least one region above and click **GO**.")
         else:
+            pretty_regions = ", ".join(
+                REGION_LABELS_BY_CODE.get(c, c) for c in combined_codes
+            )
+            st.markdown(
+                f"**Currently showing combined trending for:** {pretty_regions}"
+            )
+
             combined_dfs = []
-            for code in combine_codes:
+            for code in combined_codes:
                 df_region = fetch_trending_news_for_region(code, max_results)
                 if not df_region.empty:
                     combined_dfs.append(df_region)
 
             if not combined_dfs:
-                st.info("No data returned for the selected combination of regions.")
+                st.info(
+                    "No data returned for the stored combined regions. "
+                    "Try adjusting the selection and pressing GO again."
+                )
             else:
                 df_combined = pd.concat(combined_dfs, ignore_index=True)
                 df_combined.sort_values("view_count", ascending=False, inplace=True)

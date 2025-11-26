@@ -1,29 +1,22 @@
-# app.py  – Global News & Politics Trending Dashboard
-
+# app.py – Global News & Politics Trending Dashboard
 import os
 import re
-import requests
 from datetime import datetime, timezone
 from typing import List
 
 import pandas as pd
+import requests
 import streamlit as st
 
-# ------------- CONFIG ---------------------------------------------------------
-
+# ----------------- STREAMLIT PAGE CONFIG -----------------
 st.set_page_config(
     page_title="Global News & Politics – Trending Dashboard",
     page_icon="🌍",
     layout="wide",
 )
 
-# NOTE: to force dark mode in Streamlit, also create .streamlit/config.toml:
-# [theme]
-# base="dark"
-
-# ------------- SECRETS / API KEY ---------------------------------------------
-
-API_KEY = st.secrets.get("YOUTUBE_API_KEY") or os.getenv("YOUTUBE_API_KEY")
+# ----------------- YOUTUBE API CONFIG --------------------
+API_KEY = st.secrets.get("YOUTUBE_API_KEY", None) or os.getenv("YOUTUBE_API_KEY")
 if not API_KEY:
     st.error(
         "No YouTube API key found. Please set `YOUTUBE_API_KEY` in Streamlit **Secrets** "
@@ -33,7 +26,36 @@ if not API_KEY:
 
 YOUTUBE_API_URL = "https://www.googleapis.com/youtube/v3"
 
-# ------------- UTILITIES -----------------------------------------------------
+# Region choices for single-region dropdown
+REGION_CHOICES = {
+    "United States": "US",
+    "Canada": "CA",
+    "United Kingdom": "GB",
+    "India": "IN",
+    "Australia": "AU",
+    "Germany": "DE",
+    "France": "FR",
+    "Brazil": "BR",
+    "Japan": "JP",
+    "Mexico": "MX",
+    "Worldwide proxy (use US)": "US",
+}
+
+# Canonical label per region code (used in combined view)
+REGION_LABELS_BY_CODE = {
+    "US": "United States",
+    "CA": "Canada",
+    "GB": "United Kingdom",
+    "IN": "India",
+    "AU": "Australia",
+    "DE": "Germany",
+    "FR": "France",
+    "BR": "Brazil",
+    "JP": "Japan",
+    "MX": "Mexico",
+}
+
+# ----------------- UTILS ---------------------------------
 
 ISO_DURATION_RE = re.compile(
     r"PT"                  # starts with PT
@@ -104,7 +126,7 @@ def time_ago(published_at: str) -> str:
         return ""
 
 
-# ------------- YOUTUBE API CALL ---------------------------------------------
+# ----------------- YOUTUBE API CALL ----------------------
 
 def fetch_trending_news_for_region(
     region_code: str, max_results: int = 50
@@ -131,6 +153,8 @@ def fetch_trending_news_for_region(
 
     videos: List[dict] = []
 
+    region_label = REGION_LABELS_BY_CODE.get(region_code, region_code)
+
     for item in data.get("items", []):
         vid = item.get("id")
         snippet = item.get("snippet", {}) or {}
@@ -156,6 +180,8 @@ def fetch_trending_news_for_region(
 
         videos.append(
             {
+                "region_code": region_code,
+                "region_label": region_label,
                 "video_id": vid,
                 "title": snippet.get("title", ""),
                 "description": snippet.get("description", "") or "",
@@ -179,7 +205,7 @@ def fetch_trending_news_for_region(
     return df
 
 
-# ------------- RENDERING -----------------------------------------------------
+# ----------------- CSS / CARD STYLE ---------------------
 
 CARD_CSS = """
 <style>
@@ -235,6 +261,11 @@ CARD_CSS = """
 .video-channel {
     font-size: 0.85rem;
     color: #B4BAD4;
+    margin-bottom: 4px;
+}
+.video-region {
+    font-size: 0.8rem;
+    color: #9da5c8;
     margin-bottom: 6px;
 }
 .video-desc {
@@ -242,17 +273,16 @@ CARD_CSS = """
     color: #E1E3ED;
 }
 
-/* Tab bubbles tweak (optional, relies on default st.tabs) */
-.css-10trblm, .stTabs [data-baseweb="tab"] {
+/* Tab text slightly bolder */
+.stTabs [data-baseweb="tab"] {
     font-weight: 600;
 }
 </style>
 """
-
 st.markdown(CARD_CSS, unsafe_allow_html=True)
 
 
-def render_video_list(df: pd.DataFrame, section_key: str) -> None:
+def render_video_list(df: pd.DataFrame, section_key: str, show_region: bool = False) -> None:
     if df.empty:
         st.info("No videos found for this section.")
         return
@@ -265,6 +295,7 @@ def render_video_list(df: pd.DataFrame, section_key: str) -> None:
         views_str = format_views(int(row["view_count"]))
         dur_str = format_duration_sec(int(row["duration_sec"]))
         age_str = time_ago(row["published_at"])
+        region_label = row.get("region_label", None)
 
         desc = row.get("description", "") or ""
         # Truncate description to ~200 characters
@@ -275,6 +306,10 @@ def render_video_list(df: pd.DataFrame, section_key: str) -> None:
             short_desc = desc
 
         rank = idx + 1
+
+        region_html = ""
+        if show_region and region_label:
+            region_html = f'<div class="video-region">Trending in {region_label}</div>'
 
         card_html = f"""
         <div class="video-card">
@@ -295,6 +330,7 @@ def render_video_list(df: pd.DataFrame, section_key: str) -> None:
                 <div class="video-channel">
                     {ch}
                 </div>
+                {region_html}
                 <div class="video-desc">
                     {short_desc}
                 </div>
@@ -304,22 +340,7 @@ def render_video_list(df: pd.DataFrame, section_key: str) -> None:
         st.markdown(card_html, unsafe_allow_html=True)
 
 
-# ------------- MAIN APP ------------------------------------------------------
-
-REGION_CHOICES = {
-    "United States": "US",
-    "Canada": "CA",
-    "United Kingdom": "GB",
-    "India": "IN",
-    "Australia": "AU",
-    "Germany": "DE",
-    "France": "FR",
-    "Brazil": "BR",
-    "Japan": "JP",
-    "Mexico": "MX",
-    "Worldwide proxy (use US)": "US",
-}
-
+# ----------------- MAIN APP --------------------------------
 
 def main():
     st.title("🌍 Global News & Politics – Trending Dashboard")
@@ -332,7 +353,7 @@ def main():
     col1, col2 = st.columns([2, 1])
     with col1:
         region_label = st.selectbox(
-            "Region",
+            "Primary region (single-region view)",
             list(REGION_CHOICES.keys()),
             index=0,
         )
@@ -347,9 +368,22 @@ def main():
 
     region_code = REGION_CHOICES[region_label]
 
+    # Extra: which regions to combine for the combined tab
+    combine_options = [
+        lbl for lbl in REGION_CHOICES.keys()
+        if not lbl.startswith("Worldwide proxy")
+    ]
+    combine_labels = st.multiselect(
+        "Optional: combine multiple regions for a pseudo-global view",
+        options=combine_options,
+        default=["United States", "Canada", "United Kingdom"],
+        help="These regions will be merged in the **Combined regions** tab.",
+    )
+    combine_codes = sorted({REGION_CHOICES[lbl] for lbl in combine_labels})
+
     refresh = st.button("🔄 Refresh data now")
 
-    # Fetch data (no cache for simplicity; you could add @st.cache_data)
+    # Single-region data
     df = fetch_trending_news_for_region(
         region_code=region_code, max_results=max_results
     )
@@ -369,26 +403,77 @@ def main():
         f"`{region_code}` ({region_label})."
     )
 
-    tabs = st.tabs(["Regular videos", "Shorts", "Raw table"])
+    tabs = st.tabs(
+        ["Regular videos", "Shorts", "Combined regions", "Raw table"]
+    )
+    tab_reg, tab_shorts, tab_combined, tab_raw = tabs
 
-    with tabs[0]:
+    # -------- Regular tab ----------
+    with tab_reg:
         st.subheader("Top trending regular News & Politics videos")
         st.caption(
             "These are trending News & Politics videos that look like regular 16:9, non-Shorts. "
-            "Ranked by current global view count."
+            "Ranked by current global view count within the selected region."
         )
         render_video_list(regular_df.head(20), section_key="regular")
 
-    with tabs[1]:
+    # -------- Shorts tab ----------
+    with tab_shorts:
         st.subheader("Top trending News & Politics Shorts")
         st.caption(
-            "These are likely **Shorts** (≤ 75 seconds or tagged `#shorts`) in the News & Politics category."
+            "These are likely **Shorts** (≤ 75 seconds or tagged `#shorts`) in the News & Politics category "
+            "for the selected region."
         )
         render_video_list(shorts_df.head(20), section_key="shorts")
 
-    with tabs[2]:
-        st.subheader("Raw data")
-        st.caption("Full DataFrame of all fetched videos.")
+    # -------- Combined regions tab ----------
+    with tab_combined:
+        st.subheader("Combined regions – pseudo-global view")
+        st.caption(
+            "This section merges videos from multiple regions' News & Politics trending lists and ranks them "
+            "by current global view count. Each card shows which region that instance is trending in."
+        )
+
+        if not combine_codes:
+            st.info("Select at least one region to combine in the multiselect above.")
+        else:
+            combined_dfs = []
+            for code in combine_codes:
+                df_region = fetch_trending_news_for_region(code, max_results)
+                if not df_region.empty:
+                    combined_dfs.append(df_region)
+
+            if not combined_dfs:
+                st.info("No data returned for the selected combination of regions.")
+            else:
+                df_combined = pd.concat(combined_dfs, ignore_index=True)
+                df_combined.sort_values("view_count", ascending=False, inplace=True)
+                df_combined.reset_index(drop=True, inplace=True)
+
+                # Ensure is_short column exists
+                if "is_short" not in df_combined.columns:
+                    df_combined["is_short"] = False
+
+                st.markdown("##### Combined regular videos")
+                combined_regular = df_combined[~df_combined["is_short"]].copy()
+                render_video_list(
+                    combined_regular.head(30),
+                    section_key="combined_regular",
+                    show_region=True,
+                )
+
+                st.markdown("##### Combined Shorts")
+                combined_shorts = df_combined[df_combined["is_short"]].copy()
+                render_video_list(
+                    combined_shorts.head(30),
+                    section_key="combined_shorts",
+                    show_region=True,
+                )
+
+    # -------- Raw table tab ----------
+    with tab_raw:
+        st.subheader("Raw data – primary region only")
+        st.caption("Full DataFrame of all fetched videos for the single selected region.")
         st.dataframe(df)
 
 
